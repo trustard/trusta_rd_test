@@ -1,44 +1,29 @@
 @startuml select_victim_block_flow
 start
-:Input candidate_blocks, candidate_count,
-erase_count_max, wl_weight, current_p_e_avg;
-if (candidate_blocks == NULL or candidate_count == 0?) then (yes)
+if (blocks == NULL
+or block_count == 0) then (yes)
   :return NULL;
   stop
+else (no)
+  :best_block <- NULL;
+  :min_cost <- DBL_MAX;
+  :i <- 0;
+  while (i < block_count?)
+    :candidate <- blocks[i];
+    :total_cost <- compute_cost(candidate,
+                                erase_count_max,
+                                wl_weight);
+    note right
+      compute_cost normalizes erase count,
+      penalizes higher wear, and avoids division by zero.
+    end note
+    if (total_cost < min_cost?) then (yes)
+      :min_cost <- total_cost;
+      :best_block <- candidate;
+    endif
+    :i <- i + 1;
+  endwhile
+  :return best_block;
+  stop
 endif
-:best_block <- NULL;
-:min_cost <- DBL_MAX;
-:Ignore current_p_e_avg for future heuristics;
-repeat
-  :block <- candidate_blocks[i];
-  :n_valid <- block.valid_page_count;
-  :erase_count <- block.p_e_cycle_count;
-  if (erase_count_max > 0?) then (yes)
-    :normalized_max <- erase_count_max;
-  else (no)
-    :normalized_max <- 1.0;
-  endif
-  if (normalized_max > 0.0?) then (yes)
-    :wlf <- erase_count / normalized_max;
-  else (no)
-    :wlf <- 1.0;
-  endif
-  if (wlf > 1.0?) then (yes)
-    :wlf <- 1.0;
-  endif
-  :wear_level_factor <- 1.0 - wlf;
-  if (wear_level_factor > 0.0?) then (yes)
-    :cost_term1 <- n_valid / wear_level_factor;
-  else (no)
-    :cost_term1 <- DBL_MAX;
-  endif
-  :wl_penalty <- wl_weight * erase_count;
-  :total_cost <- cost_term1 + wl_penalty;
-  if (total_cost < min_cost?) then (yes)
-    :min_cost <- total_cost;
-    :best_block <- block;
-  endif
-repeat while ( ++i < candidate_count ) is (yes)
-:return best_block;
-stop
 @enduml

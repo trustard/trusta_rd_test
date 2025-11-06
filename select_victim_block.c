@@ -1,48 +1,51 @@
 #include <stddef.h>
 #include <float.h>
 
+/* Represents the metadata required to evaluate a GC candidate block. */
 typedef struct {
+    unsigned int id;
     unsigned int valid_page_count;
-    unsigned int p_e_cycle_count;
+    unsigned int erase_count;
 } Block;
 
-const Block *select_victim_block(const Block *candidate_blocks,
-                                 size_t candidate_count,
+/* Computes the GC cost for a candidate based on valid pages and wear leveling. */
+static double compute_cost(const Block *block, unsigned int erase_count_max, double wl_weight) {
+    /* Normalize the erase counter to determine how close the block is to endurance limits. */
+    const double wlf = (block->erase_count >= erase_count_max || erase_count_max == 0U)
+        ? 1.0
+        : (double)block->erase_count / (double)erase_count_max;
+
+    const double remaining_wear = 1.0 - wlf;
+    /* Favor blocks with fewer valid pages while avoiding division by zero. */
+    const double cost_term1 = (remaining_wear <= 0.0)
+        ? DBL_MAX
+        : (double)block->valid_page_count / remaining_wear;
+
+    const double wl_penalty = wl_weight * (double)block->erase_count;
+    return cost_term1 + wl_penalty;
+}
+
+const Block *select_victim_block(const Block *blocks,
+                                 size_t block_count,
                                  unsigned int erase_count_max,
                                  double wl_weight,
-                                 double current_p_e_avg) {
-    if (candidate_blocks == NULL || candidate_count == 0) {
+                                 double current_pe_avg) {
+    (void)current_pe_avg; /* Included for API parity with firmware pseudocode. */
+
+    if (blocks == NULL || block_count == 0U) {
         return NULL;
     }
-
-    (void)current_p_e_avg; // Reserved for future heuristics that use fleet-wide averages.
 
     const Block *best_block = NULL;
     double min_cost = DBL_MAX;
 
-    for (size_t i = 0; i < candidate_count; ++i) {
-        const Block *block = &candidate_blocks[i];
-        double n_valid = (double)block->valid_page_count;
-        double erase_count = (double)block->p_e_cycle_count;
-
-        double normalized_max = erase_count_max > 0 ? (double)erase_count_max : 1.0;
-        double wlf = normalized_max > 0.0 ? (erase_count / normalized_max) : 1.0;
-        if (wlf > 1.0) {
-            wlf = 1.0;
-        }
-
-        double cost_term1 = DBL_MAX;
-        double wear_level_factor = 1.0 - wlf;
-        if (wear_level_factor > 0.0) {
-            cost_term1 = n_valid / wear_level_factor;
-        }
-
-        double wl_penalty = wl_weight * erase_count;
-        double total_cost = cost_term1 + wl_penalty;
-
+    for (size_t i = 0U; i < block_count; ++i) {
+        const Block *candidate = &blocks[i];
+        /* Evaluate the current candidate and keep whichever block yields the lowest cost. */
+        const double total_cost = compute_cost(candidate, erase_count_max, wl_weight);
         if (total_cost < min_cost) {
             min_cost = total_cost;
-            best_block = block;
+            best_block = candidate;
         }
     }
 
@@ -53,25 +56,29 @@ const Block *select_victim_block(const Block *candidate_blocks,
 #include <stdio.h>
 
 int main(void) {
-    Block candidates[] = {
-        { .valid_page_count = 24, .p_e_cycle_count = 900 },
-        { .valid_page_count = 12, .p_e_cycle_count = 650 },
-        { .valid_page_count = 16, .p_e_cycle_count = 1200 }
+    const Block candidates[] = {
+        { .id = 1U, .valid_page_count = 20U, .erase_count = 800U },
+        { .id = 2U, .valid_page_count = 10U, .erase_count = 600U },
+        { .id = 3U, .valid_page_count = 25U, .erase_count = 400U },
     };
 
-    const Block *result = select_victim_block(candidates,
-                                              sizeof(candidates) / sizeof(candidates[0]),
-                                              3000,
-                                              0.05,
-                                              750.0);
+    const unsigned int erase_count_max = 3000U;
+    const double wl_weight = 0.05;
+    const double current_pe_avg = 500.0;
 
-    if (result != NULL) {
-        size_t index = (size_t)(result - candidates);
-        printf("Victim block index: %zu\n", index);
-        printf("Valid pages: %u\n", result->valid_page_count);
-        printf("P/E cycles: %u\n", result->p_e_cycle_count);
+    const Block *victim = select_victim_block(candidates,
+                                              sizeof(candidates) / sizeof(candidates[0]),
+                                              erase_count_max,
+                                              wl_weight,
+                                              current_pe_avg);
+
+    if (victim != NULL) {
+        printf("Selected block id %u with %u valid pages and erase count %u\n",
+               victim->id,
+               victim->valid_page_count,
+               victim->erase_count);
     } else {
-        printf("No victim block selected.\n");
+        printf("No candidate block selected\n");
     }
 
     return 0;
